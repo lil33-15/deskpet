@@ -2,7 +2,6 @@ package com.deskpet.data
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
@@ -52,7 +51,7 @@ object KmmySpritesheetRenderer {
                     drawFrame(canvas, row, col)
                 }
             }
-            File(destDir).mkdirs()
+            destDir.mkdirs()
             out.outputStream().use { os ->
                 // API 30 起 WEBP 常量改走 WEBP_LOSSLESS；低版本 WEBP quality=100 即无损。
                 // 必须无损：有损压缩的边缘噪声会让透明通道出现杂点
@@ -264,9 +263,16 @@ object KmmySpritesheetRenderer {
 
     // ============ 16 行状态动画 ============
 
+    /** 入口：把画布平移到 (row,col) 格子后画该帧 */
     private fun drawFrame(sheet: Canvas, row: Int, col: Int) {
         sheet.save()
         sheet.translate(col * CELL.toFloat(), row * CELL.toFloat())
+        drawState(sheet, row, col)
+        sheet.restore()
+    }
+
+    /** 在已定位好的格子坐标系里画一帧（row2 镜像复用 row1，不重复平移） */
+    private fun drawState(sheet: Canvas, row: Int, col: Int) {
         when (row) {
             0 -> { // idle 待机呼吸
                 val bob = intArrayOf(0, -2, -4, -4, -2, 0)[col]
@@ -282,15 +288,14 @@ object KmmySpritesheetRenderer {
                 if (col % 2 == 0) { p.armsL = "swing1"; p.armsR = "swing2" } else { p.armsL = "swing2"; p.armsR = "swing1" }
                 drawKmmy(sheet, p)
             }
-            2 -> { // 向左走 = 镜像
+            2 -> { // 向左走 = 水平镜像向右走
                 sheet.save()
                 sheet.scale(-1f, 1f, 96f, 96f)
-                drawFrame(sheet, 1, col)
+                drawState(sheet, 1, col)
                 sheet.restore()
             }
             3 -> { // 挥手
-                val p = Pose(armsR = if (col % 2 == 0) "wave" else "wave2", tilt = if (col % 2 == 1) 2f else -2f)
-                drawKmmy(sheet, p)
+                drawKmmy(sheet, Pose(armsR = if (col % 2 == 0) "wave" else "wave2", tilt = if (col % 2 == 1) 2f else -2f))
             }
             4 -> { // 跳
                 when (col) {
@@ -315,15 +320,14 @@ object KmmySpritesheetRenderer {
                 drawKmmy(sheet, Pose(foot = 190f, legsL = "sit", legsR = "sit", tilt = tilt.toFloat()))
             }
             7 -> { // 原地快跑
-                val p = Pose(
+                drawKmmy(sheet, Pose(
                     foot = 180f + if (col % 2 == 1) -6 else 0,
                     legsL = if (col % 2 == 0) "walk1" else "walk2",
                     legsR = if (col % 2 == 0) "walk2" else "walk1",
                     armsL = if (col % 2 == 0) "swing1" else "swing2",
                     armsR = if (col % 2 == 0) "swing2" else "swing1",
                     squash = if (col % 2 == 1) 0.97f else 1f
-                )
-                drawKmmy(sheet, p)
+                ))
             }
             8 -> { // 记账（捧账本 + 写字）
                 drawKmmy(sheet, Pose(
@@ -373,10 +377,9 @@ object KmmySpritesheetRenderer {
             }
             13 -> { // 翘二郎腿坐椅子
                 chair(sheet)
-                val lr = if (col % 2 == 0) "cross" else "cross2"
                 drawKmmy(sheet, Pose(
                     foot = 146f, armsL = "back", armsR = "back",
-                    legsL = "cross", legsR = lr, legsFront = true,
+                    legsL = "cross", legsR = if (col % 2 == 0) "cross" else "cross2", legsFront = true,
                     tilt = intArrayOf(-2, 0, 2, 0)[col].toFloat()
                 ))
             }
@@ -394,6 +397,5 @@ object KmmySpritesheetRenderer {
                 }
             }
         }
-        sheet.restore()
     }
 }
