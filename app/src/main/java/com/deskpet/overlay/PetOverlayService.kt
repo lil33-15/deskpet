@@ -81,18 +81,12 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
             if (!::anim.isInitialized) return
             val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
             when (i?.action) {
-                // 灭屏把动画循环和自主行为一起停，否则 auto 会在灭屏期间切状态，
-                // 亮屏后宠物会播放一段"没来由"的动作
                 Intent.ACTION_SCREEN_OFF -> { screenOn = false; anim.stop(); auto?.stop() }
                 Intent.ACTION_SCREEN_ON -> {
                     screenOn = true
                     anim.start()
-                    // 省电模式下自主乱跑属于"非必要活动"，不开
                     if (!pm.isPowerSaveMode) auto?.start()
                 }
-                // 系统省电开关切换（官方 isPowerSaveMode + 广播的标准联动）：
-                // 帧率减半交给 AnimationController.powerSaveMode；自主行为
-                // 按需停/恢复（恢复仅限亮屏状态）
                 android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
                     anim.powerSaveMode = pm.isPowerSaveMode
                     if (pm.isPowerSaveMode) auto?.stop()
@@ -112,13 +106,52 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         auto?.onUserTouch()
     }
 
+    /** 连击计数任务：350ms 静默窗口后按次数派发动作 */
+    private var tapJob: Job? = null
+    private var tapCount = 0
+
+    /**
+     * 小小kmmy 的暗号：单击=害羞，双击=亲亲，三连击及以上=生气。
+     * 用计数窗口而非常见的 onDoubleTap 回调，是为了能区分三连击；
+     * 代价是单击响应有 350ms 延迟，桌宠场景可接受。
+     */
     private fun onTap() {
-        if (anim.isCodexPet()) {
-            anim.switchState(PetAnimationState.WAVING)
-        } else {
+        if (!anim.isCodexPet()) {
             bounce()
+            auto?.onUserTouch()
+            return
         }
         auto?.onUserTouch()
+        tapCount++
+        tapJob?.cancel()
+        tapJob = sc.launch {
+            delay(350)
+            val n = tapCount
+            tapCount = 0
+            when {
+                n >= 3 -> anim.switchState(PetAnimationState.ANGRY)
+                n == 2 -> anim.switchState(PetAnimationState.KISS)
+                else -> anim.switchState(PetAnimationState.SHY)
+            }
+        }
+    }
+
+    /** 到处走走：行走状态时按帧率平移悬浮窗（边界由 clampPosition 兜底夹取） */
+    private var wanderJob: Job? = null
+
+    private fun startWander() {
+        wanderJob?.cancel()
+        wanderJob = sc.launch {
+            val step = 5f * resources.displayMetrics.density
+            while (isActive) {
+                when (anim.currentState.value) {
+                    PetAnimationState.RUNNING_LEFT -> { wx -= step; updatePosition() }
+                    PetAnimationState.RUNNING_RIGHT -> { wx += step; updatePosition() }
+                    else -> { }
+                }
+                delay(200)
+            }
+        }
     }
 
     private fun onScale(zoom: Float, focusX: Float, focusY: Float) {
@@ -127,12 +160,7 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         // clamp 截断后实际生效的比例，位置补偿必须用它，否则锚点会漂
         val applied = if (savedScale > 0f) ns / savedScale else 1f
         savedScale = ns
-        // 先更新尺寸（petWidth 状态同步生效），后续 clampPosition 才能用新尺寸
-        // 把放大后的窗口夹回屏幕内，而不是放行一帧溢出
         anim.setScale(ns)
-        // 捏合缩放同步回 DataStore（防抖落盘，捏合过程中不写）：否则列表页
-        // 滑块还显示旧值，之后任意一次滑块微调会让宠物从捏合后的大小"瞬移"
-        // 回滑块值。observeScale 收到回写后差值≈0 不会回环
         val pid = petId
         if (pid != null && applied != 1f) {
             scaleSyncJob?.cancel()
@@ -146,9 +174,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
             }
         }
         if (applied != 1f) {
-            // 以双指中心（centroid）为锚点缩放：窗口尺寸从 W 变为 W*applied 时，
-            // 把窗口左上角反向平移 focus*(1-applied)，手指夹住的点保持不动。
-            // 旧实现只改大小不补位置，放大时宠物朝右下"逃"、缩小时朝左上"缩"。
             wx += focusX * (1f - applied)
             wy += focusY * (1f - applied)
             updatePosition()
@@ -186,10 +211,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         startForeground()
     }
 
-    /**
-     * targetSdk 34+ 要求动态注册 receiver 时声明 exported 标志；
-     * SCREEN_ON/OFF 是系统 protected broadcast，用 NOT_EXPORTED 即可正常收到。
-     */
     private fun registerReceiverSafely() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -199,13 +220,10 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         androidx.core.content.ContextCompat.registerReceiver(
             this, screenReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
         )
-        // 注册时同步一次省电/亮灭屏状态：服务可能在省电已开启或灭屏期间才启动
         val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
         if (::anim.isInitialized) {
             anim.powerSaveMode = pm.isPowerSaveMode
         }
-        // START_STICKY 可能在灭屏期间拉起服务，此时不会有 SCREEN_OFF 广播到来，
-        // 不主动查一次就会在锁屏上白跑动画（loadPet 据此决定是否立即启动）
         screenOn = pm.isInteractive
     }
 
@@ -213,15 +231,12 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         try {
             val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
             nm.createNotificationChannel(android.app.NotificationChannel(
-                CHANNEL_ID, "桌面宠物", android.app.NotificationManager.IMPORTANCE_LOW
-            ).apply { description = "宠物悬浮窗运行中" })
+                CHANNEL_ID, "小小kmmy", android.app.NotificationManager.IMPORTANCE_LOW
+            ).apply { description = "小小kmmy悬浮窗运行中" })
 
             val contentIntent = android.app.PendingIntent.getActivity(
                 this, 0,
                 Intent(this, com.deskpet.MainActivity::class.java).apply {
-                    // NEW_TASK 保证服务里能启动 Activity；CLEAR_TOP|SINGLE_TOP
-                    // 复用已存在的实例走 onNewIntent——否则应用开着时点通知，
-                    // 返回栈里会再叠一个重复的列表页
                     addFlags(
                         Intent.FLAG_ACTIVITY_NEW_TASK or
                                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -231,16 +246,12 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
                 android.app.PendingIntent.FLAG_IMMUTABLE
             )
             val ntf = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("桌面宠物")
-                .setContentText("正在运行")
-                // 自有白色剪影小图标（状态栏/通知栏单色规范）；旧代码用的
-                // android.R.drawable.ic_menu_gallery 是系统图库图标占位
+                .setContentTitle("小小kmmy")
+                .setContentText("正在桌面上跑来跑去")
                 .setSmallIcon(R.drawable.ic_stat_pet)
-                // 通知栏展开时显示彩色橘团大图（状态栏小图标按规范只能是单色剪影）
                 .setLargeIcon(android.graphics.BitmapFactory.decodeResource(resources, R.drawable.ic_notif_large))
                 .setContentIntent(contentIntent)
                 .setOngoing(true)
-                // 通知栏直接关闭宠物，不用回到 App 点「关闭」
                 .addAction(
                     android.R.drawable.ic_menu_close_clear_cancel,
                     "关闭宠物",
@@ -259,17 +270,12 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         } catch (e: Exception) {
             Log.w(TAG, "startForeground failed", e)
             Toast.makeText(this@PetOverlayService, "前台服务失败: ${e.message}", Toast.LENGTH_LONG).show()
-            // 只 catch 不停服没用：系统 5 秒超时后仍会抛 RemoteServiceException
-            // （"did not then call startForeground"）直接崩溃，必须主动止损
             stopSelf()
         }
     }
 
     override fun onStartCommand(i: Intent?, f: Int, s: Int): Int {
-        // LifecycleService 需要 super 来派发生命周期事件（否则 lifecycle 一直停在 CREATED）
         super.onStartCommand(i, f, s)
-        // 通知栏「关闭宠物」按钮：这是用户主动关闭，要清掉自动恢复标志，
-        // 否则下次打开 App 宠物会"复活"（违背用户刚才的关闭意图）
         if (i?.action == ACTION_STOP) {
             repo.setOverlayAutoResumeAsync(false)
             stopSelf()
@@ -286,9 +292,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
                 }
                 show(id)
             } catch (e: CancellationException) {
-                // 被新的启动请求取消（快速连续切换宠物）属正常流程：
-                // 新协程会接管加载。绝不能在这里 stopSelf，否则会把
-                // 正在加载新宠物的服务整个停掉（宠物消失）
                 return@launch
             } catch (e: Exception) {
                 Log.e(TAG, "show failed", e)
@@ -301,11 +304,11 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
     }
 
     override fun onDestroy() {
-        // 异步落盘，不用 runBlocking 阻塞主线程（最多 2s 的 ANR 余量风险）；
-        // 手势结束时的同步保存已经兜底了主要的数据丢失路径
         persistPositionAsync()
         OverlayState.setRunning(null)
         scaleJob?.cancel()
+        tapJob?.cancel()
+        wanderJob?.cancel()
         removeOverlayView()
         if (::anim.isInitialized) anim.stop()
         auto?.stop()
@@ -320,16 +323,11 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         super.onDestroy()
     }
 
-    /** Manifest 里 stopWithTask="false"（悬浮窗应用标准做法）：划掉最近任务
-     *  只关 App 界面，本服务带着宠物继续显示，本方法在划掉时回调——只做
-     *  位置落盘这类收尾，绝不 stopSelf（否则配置白改、宠物照样消失）。
-     *  关闭路径 = 通知栏「关闭宠物」/ 收纳坞开关 / 用户强停。 */
     override fun onTaskRemoved(r: Intent?) {
         super.onTaskRemoved(r)
         persistPositionAsync()
     }
 
-    /** 在独立 IO 作用域异步保存位置，服务销毁后仍能完成写入 */
     private fun persistPositionAsync() {
         petId?.let { repo.savePositionAsync(it, wx, wy, savedScale) }
     }
@@ -351,8 +349,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
     }
 
     private suspend fun show(id: String) {
-        // 权限可能在运行期间被用户撤销（撤销时系统会立刻移除悬浮窗但服务还在）：
-        // START_STICKY 重启或切换宠物时会走到这里，先快速失败，不做无谓的加载 IO
         if (!Settings.canDrawOverlays(this)) {
             OverlayState.setRunning(null)
             stopSelf()
@@ -366,7 +362,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
             stopSelf()
             return
         }
-        // 切换宠物前保存上一只的位置
         if (petId != null && petId != id) {
             try {
                 withTimeout(2000L) { persistPosition() }
@@ -377,7 +372,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         petId = id
         wx = info.positionX
         wy = info.positionY
-        // 解析 pet.json / 读取图片尺寸都是磁盘 IO，必须离开主线程
         val loaded = withContext(Dispatchers.IO) { anim.reload(info) }
         if (!loaded) {
             Toast.makeText(this, "宠物加载失败，文件可能已损坏", Toast.LENGTH_SHORT).show()
@@ -387,27 +381,22 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         }
         anim.setScale(info.scale)
         savedScale = info.scale
-        // 灭屏期间被系统拉起时不启动动画，等 SCREEN_ON 广播再开（registerReceiverSafely 已同步 screenOn）
         if (screenOn) anim.start()
-        // 取消是协作式的：从最后一个挂起点返回到 add() 之间没有检查点，
-        // 极速连点时旧协程可能带着"已过期"的宠物把视图加进窗口，
-        // 造成 OverlayState 与屏幕实际显示不一致
         currentCoroutineContext().ensureActive()
         if (!add()) {
             OverlayState.setRunning(null)
-            // 不停服会留下"正在运行"的通知和常驻前台服务，但宠物根本没显示
             stopSelf()
             return
         }
         observeScale(id)
         auto?.stop()
         auto = AutonomousBehavior(anim, sc)
-        // 亮屏且非省电才启动自主行为；灭屏/省电场景由广播负责恢复
         if (screenOn && !anim.powerSaveMode) auto?.start()
+        // 行走位移协程：RUNNING_LEFT/RIGHT 状态期间平移悬浮窗
+        startWander()
         OverlayState.setRunning(id)
     }
 
-    /** 悬浮窗运行期间跟随仓库里的缩放值（界面上的缩放滑块）*/
     private fun observeScale(id: String) {
         scaleJob?.cancel()
         scaleJob = sc.launch {
@@ -425,9 +414,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
     private fun add(): Boolean {
         if (!::wm.isInitialized) return false
         if (!Settings.canDrawOverlays(this)) {
-            // 权限引导由 MainActivity 负责（它有 pendingStart + ON_RESUME 重试的完整流程）。
-            // 这里不要跳设置页：Android 10+ 服务在"无权限"状态下启动 Activity 会被
-            // 系统静默拦截（有 SYSTEM_ALERT_WINDOW 的 App 才豁免），跳了也白跳。
             return false
         }
         removeOverlayView()
@@ -446,9 +432,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
-            // 用绝对方向 LEFT 而非 START：RTL 语言（阿拉伯语/希伯来语等）下
-            // START 会镜像成"距右边缘"，而 wx/clampPosition 全按左边缘计算——
-            // 宠物位置镜像错位、拖拽方向相反、夹取越界。LEFT 对任何 locale 稳定
             gravity = Gravity.TOP or Gravity.LEFT
             x = wx.toInt()
             y = wy.toInt()
@@ -491,24 +474,14 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
     }
 
     private fun clampPosition() {
-        // 安全区夹取（与主界面 safeDrawing 同一病根的悬浮窗版）：本窗口带
-        // FLAG_LAYOUT_NO_LIMITS，可以画进状态栏/导航条/挖孔底下——底部是
-        // 系统手势区（拖宠物的手势会被抢走）、挖孔会遮宠物。用
-        // currentWindowMetrics.windowInsets 取显示区域的安全边距（它报告
-        // 的是显示器自身的 insets，不受本窗口 NO_LIMITS 影响）；API < 30
-        // 没有此 API，回退为旧行为（全屏边界）。垂直方向完全收进安全区，
-        // 水平方向保留"露把手"的部分出屏玩法
         val sb = safeBounds()
         val w = anim.petWidth.value
         val h = anim.petHeight.value
-        // 允许宠物左右留一部分在屏幕外，但必须留出"把手"能拖回来。
-        // 旧代码硬编码 32px，高分屏（3x 密度）上只有约 10dp，几乎抓不住。
         val margin = 24f * resources.displayMetrics.density
         wx = wx.coerceIn((sb.left - w + margin), (sb.right - margin))
         wy = wy.coerceIn(sb.top.toFloat(), (sb.bottom - h).toFloat().coerceAtLeast(sb.top.toFloat()))
     }
 
-    /** 安全区矩形（扣除系统栏 + 挖孔）。API 30+ 精确；旧版本回退全屏。 */
     private fun safeBounds(): android.graphics.Rect {
         val b = displayBounds()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -523,7 +496,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         return b
     }
 
-    /** 当前旋转下的显示区域边界（区分于 displaySize() 的宽高形式） */
     private fun displayBounds(): android.graphics.Rect {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             wm.currentWindowMetrics.bounds
@@ -535,9 +507,6 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         }
     }
 
-    /** API 30+ 用 currentWindowMetrics（跟随当前旋转）；旧版本回退 defaultDisplay。
-     *  注意不能用 maximumWindowMetrics——它不随旋转变化，旋转后 clamp 维度错乱，
-     *  宠物会被"夹"到当前屏幕之外再也找不到。 */
     private fun displaySize(): Point {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             wm.currentWindowMetrics.bounds.let { Point(it.width(), it.height()) }
@@ -547,11 +516,7 @@ class PetOverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateReg
         }
     }
 
-    /** 单击 GIF 宠物的弹跳反馈。同一时间只允许一个弹跳：
-     *  旧实现并发协程各自捕获基准 wy，连点会导致位置永久漂移（每次 +20px 漂向一边）。 */
     private var bounceJob: Job? = null
-    /** 弹跳的瞬时视觉偏移（px）。只影响渲染窗口位置，绝不写入 wy——
-     *  旧实现 delay 后把 wy 硬改回旧值，100ms 窗口内的拖拽/缩放会被静默丢弃。 */
     @Volatile
     private var bounceOffset = 0f
 

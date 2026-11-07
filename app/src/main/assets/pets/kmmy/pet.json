@@ -1,0 +1,25 @@
+{
+  "id": "kmmy",
+  "displayName": "小小kmmy",
+  "description": "黑方块小kmmy：单击害羞，双击亲亲，三连击生气；平时会到处走走、睡觉、捧着账本记账、翘二郎腿坐椅子、凑近屏幕看你",
+  "spritesheetPath": "spritesheet.webp",
+  "rows": 16,
+  "states": [
+    { "name": "idle", "row": 0, "frames": 6 },
+    { "name": "running-right", "row": 1, "frames": 8 },
+    { "name": "running-left", "row": 2, "frames": 8 },
+    { "name": "waving", "row": 3, "frames": 4 },
+    { "name": "jumping", "row": 4, "frames": 5 },
+    { "name": "failed", "row": 5, "frames": 8 },
+    { "name": "waiting", "row": 6, "frames": 6 },
+    { "name": "running", "row": 7, "frames": 6 },
+    { "name": "review", "row": 8, "frames": 6 },
+    { "name": "shy", "row": 9, "frames": 4 },
+    { "name": "kiss", "row": 10, "frames": 5 },
+    { "name": "angry", "row": 11, "frames": 6 },
+    { "name": "sleep", "row": 12, "frames": 6 },
+    { "name": "sit", "row": 13, "frames": 4 },
+    { "name": "peek", "row": 14, "frames": 5 },
+    { "name": "love", "row": 15, "frames": 4 }
+  ]
+}
