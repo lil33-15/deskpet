@@ -52,6 +52,9 @@ object SamplePetLoader {
                         val spritesheetFile = File(destDir, "spritesheet.webp")
                             .takeIf { it.exists() }
                             ?: File(destDir, "spritesheet.png").takeIf { it.exists() }
+                            // 小小kmmy：assets 里只有 pet.json，精灵图由代码现场绘制，
+                            // 避免二进制资源入库（也躲开导入转码/压缩对帧网格的任何破坏）
+                            ?: KmmySpritesheetRenderer.renderIfBuiltin(config.id, destDir)
                             ?: continue
 
                         val petInfo = PetInfo(

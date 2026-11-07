@@ -23,11 +23,12 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.deskpet"
+        // 与上游 deskpet 共存安装：换独立 applicationId（小小kmmy 自用版）
+        applicationId = "com.kmmy.deskpet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.2.0"
+        versionCode = 5
+        versionName = "1.0.0-kmmy"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // 语言资源过滤：应用 UI 只有中文（默认 values/），依赖库却携带几十种
         // 语言的翻译资源，全部裁掉，resources.arsc 与 res/ 同步瘦身
@@ -103,7 +104,6 @@ dependencies {
 
     // Kotlin Serialization (for pet.json)
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-
     // Core
     implementation("androidx.core:core-ktx:1.13.1")
 
