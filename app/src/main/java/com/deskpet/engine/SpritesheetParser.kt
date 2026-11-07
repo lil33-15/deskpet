@@ -19,7 +19,7 @@ class SpritesheetParser {
 
         /**
          * 单帧渲染尺寸上限（与 GifRenderer 的 MAX_RENDER_DIM 同思路）。
-         * 帧 = 整图 ÷ 8×9，社区一张"平坦色大图"（PNG 压缩后可能只有几百 KB，
+         * 帧 = 整图 ÷ 8×行数，社区一张"平坦色大图"（PNG 压缩后可能只有几百 KB，
          * 能混过 zip 总量限制）可以让单帧解码吃掉上百 MB——OutOfMemoryError
          * 是 Error 不是 Exception，extractFrame 的 catch 接不住会直接闪退。
          * 渲染端按 2 的幂降采样封顶，getPetSize 报告同一尺寸保持窗口一致。
@@ -35,13 +35,20 @@ class SpritesheetParser {
         }
 
         /** 窗口尺寸应使用的单帧渲染尺寸 = 单元格 ÷ inSampleSize（与 extractFrame 一致） */
-        fun renderCellSize(sheetW: Int, sheetH: Int): Pair<Int, Int> {
+        fun renderCellSize(sheetW: Int, sheetH: Int, rows: Int = SPRITESHEET_ROWS): Pair<Int, Int> {
+            val r = rows.coerceIn(1, MAX_ROWS)
             val cw = sheetW / SPRITESHEET_COLS
-            val ch = sheetH / SPRITESHEET_ROWS
+            val ch = sheetH / r
             val sample = frameSampleSize(cw, ch)
             return Pair((cw + sample - 1) / sample, (ch + sample - 1) / sample)
         }
+
+        /** pet.json rows 字段的安全上限：恶意/损坏配置写 999999 行会让单元格高度为 0 */
+        const val MAX_ROWS = 64
     }
+
+    /** 每只宠物的实际行数：pet.json 未声明时用标准 9 行（橘团等老素材） */
+    fun rowsFor(config: CodexPetConfig): Int = (config.rows ?: SPRITESHEET_ROWS).coerceIn(1, MAX_ROWS)
 
     private val json = Json { ignoreUnknownKeys = true }
     @Volatile private var cachedDecoder: BitmapRegionDecoder? = null
@@ -113,7 +120,7 @@ class SpritesheetParser {
                 BitmapFactory.decodeFile(spritesheetPath, opts)
             } catch (e: Exception) { Log.w(TAG, "Failed to decode full bitmap", e); null }
         }
-        return cachedFullBitmap
+        return if (cachedFullBitmap?.isRecycled == false) cachedFullBitmap else null
     }
 
     @Synchronized
@@ -127,14 +134,16 @@ class SpritesheetParser {
         val frames = stateConfig.frames
         if (frames <= 0) return null
         // 行号/列号钳制：pet.json 是外部导入的数据，frames=50 / row=100 这类
-        // 越界声明不能让它去解码 8x9 网格之外的区域（错帧甚至越界崩溃）
-        val row = stateConfig.row.coerceIn(0, SPRITESHEET_ROWS - 1)
+        // 越界声明不能让它去解码网格之外的区域（错帧甚至越界崩溃）。
+        // 行数按该宠物自己的 rows 配置（默认 9，小小kmmy 为 16）
+        val totalRows = rowsFor(config)
+        val row = stateConfig.row.coerceIn(0, totalRows - 1)
         val col = frameIndex % frames
 
         // API 28+: BitmapRegionDecoder
         val decoder = getDecoder(spritesheetPath)
         if (decoder != null) {
-            val rect = calculateCellRect(row, col, decoder.width, decoder.height)
+            val rect = calculateCellRect(row, col, decoder.width, decoder.height, totalRows)
             // 畸形超大单帧防护：按 2 的幂降采样到 MAX_FRAME_DIM 内再解码，
             // 缓冲尺寸同步用降采样后的 dw/dh
             val sample = frameSampleSize(rect.width(), rect.height())
@@ -184,7 +193,7 @@ class SpritesheetParser {
 
         // API 26-27 WebP 回退
         val full = getFullBitmap(spritesheetPath) ?: return null
-        val rect = calculateCellRect(row, col, full.width, full.height)
+        val rect = calculateCellRect(row, col, full.width, full.height, totalRows)
         return try {
             Bitmap.createBitmap(full, rect.left, rect.top, rect.width(), rect.height())
         } catch (e: Exception) { Log.w(TAG, "Failed to createBitmap from full", e); null }
@@ -195,9 +204,10 @@ class SpritesheetParser {
         return getStateConfig(config, state).frames.coerceIn(0, SPRITESHEET_COLS)
     }
 
-    fun calculateCellRect(row: Int, col: Int, w: Int, h: Int): Rect {
+    fun calculateCellRect(row: Int, col: Int, w: Int, h: Int, rows: Int = SPRITESHEET_ROWS): Rect {
+        val r = rows.coerceIn(1, MAX_ROWS)
         val cw = w / SPRITESHEET_COLS
-        val ch = h / SPRITESHEET_ROWS
+        val ch = h / r
         return Rect(col * cw, row * ch, (col + 1) * cw, (row + 1) * ch)
     }
 

@@ -16,11 +16,20 @@ class AutonomousBehavior(
      */
     private val now: () -> Long = { System.nanoTime() / 1_000_000L }
 ) {
+    // 小小kmmy 的自主节目单：到处走（左右行走，悬浮窗位置由 PetOverlayService 平移）、
+    // 蹦跳、原地快跑、坐着发呆、记账（REVIEW）、睡觉、翘二郎腿、凑近看人、比心。
+    // 老的 9 行素材（橘团）没有第 9~15 行，切过去会被钳制到 REVIEW 画面，不崩溃
     private val autoStates = listOf(
+        PetAnimationState.RUNNING_LEFT,
+        PetAnimationState.RUNNING_RIGHT,
         PetAnimationState.RUNNING,
         PetAnimationState.JUMPING,
         PetAnimationState.WAITING,
-        PetAnimationState.REVIEW
+        PetAnimationState.REVIEW,
+        PetAnimationState.SLEEP,
+        PetAnimationState.SIT,
+        PetAnimationState.PEEK,
+        PetAnimationState.LOVE
     )
 
     private var lastTouchTime: Long = now()

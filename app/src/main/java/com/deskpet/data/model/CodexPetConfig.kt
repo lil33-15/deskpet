@@ -11,7 +11,9 @@ data class CodexPetConfig(
     val description: String = "",
     val spritesheetPath: String,
     val schema_version: String? = null,
-    val states: List<AnimationState>? = null
+    val states: List<AnimationState>? = null,
+    /** 精灵图总行数（默认 9）。小小kmmy 用 16 行扩展网格；老素材（橘团）不填即按 9 行解析 */
+    val rows: Int? = null
 )
 
 @Serializable

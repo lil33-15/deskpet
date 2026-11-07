@@ -1,7 +1,6 @@
 package com.deskpet.engine
 
 import android.graphics.Bitmap
-import com.deskpet.data.model.CodexPetConfig
 import com.deskpet.data.model.PetAnimationState
 import com.deskpet.data.model.PetInfo
 import com.deskpet.data.model.PetType
@@ -20,7 +19,7 @@ class PetEngine(
 
     sealed class PetLoader {
         data class CodexPet(
-            val config: CodexPetConfig,
+            val config: com.deskpet.data.model.CodexPetConfig,
             val spritesheetPath: String
         ) : PetLoader()
 
@@ -76,8 +75,7 @@ class PetEngine(
     fun getPetSize(loader: PetLoader): Pair<Int, Int> {
         return when (loader) {
             is PetLoader.CodexPet -> {
-                // spritesheet 8x9 grid, cell = spritesheetW/8 x spritesheetH/9
-                // But we need to read actual dimensions
+                // spritesheet 8 列 × rows 行网格（默认 9，小小kmmy 为 16，见 pet.json）
                 val spritesheet = java.io.File(loader.spritesheetPath)
                 if (!spritesheet.exists()) return Pair(DEFAULT_PET_WIDTH, DEFAULT_PET_HEIGHT)
                 val options = android.graphics.BitmapFactory.Options().apply {
@@ -89,7 +87,9 @@ class PetEngine(
                 }
                 // 与 extractFrame 的渲染尺寸保持一致（超大单帧会被降采样，
                 // 窗口若按原始单元格算会比宠物画面大一圈）
-                val (w, h) = SpritesheetParser.renderCellSize(options.outWidth, options.outHeight)
+                val (w, h) = SpritesheetParser.renderCellSize(
+                    options.outWidth, options.outHeight, spritesheetParser.rowsFor(loader.config)
+                )
                 if (w <= 0 || h <= 0) Pair(DEFAULT_PET_WIDTH, DEFAULT_PET_HEIGHT) else Pair(w, h)
             }
             is PetLoader.Gif -> Pair(gifRenderer.width, gifRenderer.height)
